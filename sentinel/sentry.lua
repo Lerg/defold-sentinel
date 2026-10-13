@@ -244,6 +244,21 @@ local function send(json_str, callback)
     end
 end
 
+--- Runs `config.before_send`, which can edit the event or drop it.
+-- @tparam table event The event to send
+-- @tparam table hint The table passed to `capture_exception` or `capture_message`
+-- @treturn table|nil The event to send, nil if it was dropped
+local function before_send(event, hint)
+    if not M.config.before_send then
+        return event
+    end
+    event = M.config.before_send(event, hint)
+    if event == nil and hint.callback then
+        hint.callback(nil, "Dropped by before_send.")
+    end
+    return event
+end
+
 local function error_handler(source, message, traceback)
     local error = {source = source, message = message, traceback = traceback}
     local pstatus, perr = pcall(M.capture_exception, error)
@@ -253,7 +268,9 @@ local function error_handler(source, message, traceback)
 
     if M.config.on_soft_crash then
         pstatus, perr = pcall(M.config.on_soft_crash, error)
-        log_print("Soft crash callback error " .. tostring(perr))
+        if not pstatus then
+            log_print("Soft crash callback error " .. tostring(perr))
+        end
     end
 end
 
@@ -279,6 +296,7 @@ end
 -- @tparam[opt] string config.dist The distribution. Used to disambiguate build or deployment variants
 -- @tparam[opt] string config.environment The environment. This string is freeform. E.g., 'staging' vs 'prod'
 -- @tparam[opt] table config.user User information to include with events
+-- @tparam[opt] function config.before_send Called as `before_send(event, hint)` before an event is sent, `hint` is the table given to `capture_exception` or `capture_message`. Return the event, edited or not, or nil to drop it
 function M.init(config)
     assert(type(config) == "table", "`config` should be a table.")
     M.config = config
@@ -473,6 +491,11 @@ function M.capture_exception(err)
         event.breadcrumbs = M.breadcrumbs
     end
 
+    event = before_send(event, err)
+    if event == nil then
+        return
+    end
+
     if next(event.extra) == nil then
         event.extra = nil
     end
@@ -533,6 +556,11 @@ function M.capture_message(msg)
 
     if M.breadcrumbs then
         event.breadcrumbs = M.breadcrumbs
+    end
+
+    event = before_send(event, msg)
+    if event == nil then
+        return
     end
 
     if next(event.extra) == nil then
